@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Data Engineering Daily</title>
   
-  <!-- Inline Data URI Favicon (Prevents 404 missing icon errors) -->
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
   
   <style>
@@ -155,7 +154,6 @@
       { name: "Reddit BigData", url: "https://www.reddit.com/r/bigdata/.rss" }
     ];
 
-    // Clean HTML tags and trim description string
     function cleanText(html, maxLength = 220) {
       if (!html) return '';
       const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -163,45 +161,41 @@
       return text.length > maxLength ? text.substring(0, maxLength).trim() + '...' : text;
     }
 
-    // Fetch RSS items using primary + fallback proxies to prevent CORS errors
-    async function fetchFeed(source) {
-      const primaryUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(source.url)}`;
-      const fallbackUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(primaryUrl)}`;
+    // Parse raw XML RSS feed natively in browser
+    async function fetchAndParseRSS(source) {
+      const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(source.url)}`;
 
       try {
-        const response = await fetch(primaryUrl);
-        if (response.ok) {
-          const data = await response.json();
-          if (data.status === 'ok' && Array.isArray(data.items)) {
-            return data.items.map(item => ({ ...item, categoryName: source.name }));
-          }
-        }
-      } catch (err) {
-        console.warn(`Primary CORS fetch failed for ${source.name}, attempting proxy...`);
-      }
+        const response = await fetch(proxyUrl);
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        
+        const str = await response.text();
+        const data = new window.DOMParser().parseFromString(str, "text/xml");
+        const items = data.querySelectorAll("item");
+        
+        const articles = [];
+        items.forEach(item => {
+          articles.push({
+            title: item.querySelector("title")?.textContent || "Untitled",
+            link: item.querySelector("link")?.textContent || "#",
+            description: item.querySelector("description")?.textContent || "",
+            pubDate: item.querySelector("pubDate")?.textContent || new Date().toISOString(),
+            categoryName: source.name
+          });
+        });
 
-      // Secondary fetch via allorigins proxy
-      try {
-        const proxyResponse = await fetch(fallbackUrl);
-        if (proxyResponse.ok) {
-          const proxyData = await proxyResponse.json();
-          const parsed = JSON.parse(proxyData.contents);
-          if (parsed.status === 'ok' && Array.isArray(parsed.items)) {
-            return parsed.items.map(item => ({ ...item, categoryName: source.name }));
-          }
-        }
+        return articles;
       } catch (err) {
         console.error(`Failed to load feed: ${source.name}`, err);
+        return [];
       }
-
-      return [];
     }
 
     async function loadNews() {
       const container = document.getElementById("news-container");
 
       try {
-        const feedPromises = FEEDS.map(feed => fetchFeed(feed));
+        const feedPromises = FEEDS.map(feed => fetchAndParseRSS(feed));
         const results = await Promise.all(feedPromises);
         const allArticles = results.flat();
 
@@ -210,16 +204,16 @@
           return;
         }
 
-        // Sort feed items by publish date descending
+        // Sort items by date descending
         allArticles.sort((a, b) => new Date(b.pubDate || 0) - new Date(a.pubDate || 0));
 
         container.innerHTML = `
           <div class="feed-grid">
             ${allArticles.map(item => `
               <article class="card">
-                <span class="badge">${item.categoryName || 'DATA ENGINEERING'}</span>
-                <h2>${item.title || 'Untitled'}</h2>
-                <p>${cleanText(item.description || item.content)}</p>
+                <span class="badge">${item.categoryName}</span>
+                <h2>${item.title}</h2>
+                <p>${cleanText(item.description)}</p>
                 <a href="${item.link}" target="_blank" rel="noopener noreferrer">
                   Read Article &rarr;
                 </a>
